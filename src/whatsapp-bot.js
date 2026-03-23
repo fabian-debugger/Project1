@@ -38,7 +38,9 @@ function initWhatsApp() {
 
     client.on('qr', (qr) => {
       logger.info('QR code received — scan with WhatsApp on your phone:');
-      qrcode.generate(qr, { small: true });
+      qrcode.generate(qr, { small: true }, (qrString) => {
+        console.log('\n' + qrString);
+      });
     });
 
     client.on('authenticated', () => {
