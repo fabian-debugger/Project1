@@ -11,6 +11,41 @@ let isReady = false;
  *
  * @returns {Promise<void>} Resolves when the client is ready
  */
+function createClient() {
+  return new Client({
+    authStrategy: new LocalAuth({
+      dataPath: config.whatsapp.authPath,
+    }),
+    webVersionCache: {
+      type: 'none',
+    },
+    puppeteer: {
+      headless: true,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-accelerated-2d-canvas',
+        '--single-process',
+      ],
+    },
+  });
+}
+
+async function destroyClient() {
+  if (client) {
+    try {
+      await client.destroy();
+    } catch {
+      // ignore destroy errors
+    }
+    client = null;
+    isReady = false;
+  }
+}
+
 function initWhatsApp() {
   return new Promise((resolve, reject) => {
     if (isReady && client) {
@@ -19,26 +54,7 @@ function initWhatsApp() {
       return;
     }
 
-    client = new Client({
-      authStrategy: new LocalAuth({
-        dataPath: config.whatsapp.authPath,
-      }),
-      webVersionCache: {
-        type: 'none',
-      },
-      puppeteer: {
-        headless: true,
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-gpu',
-          '--disable-accelerated-2d-canvas',
-          '--single-process',
-        ],
-      },
-    });
+    client = createClient();
 
     client.on('qr', (qr) => {
       const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qr)}`;
@@ -76,20 +92,22 @@ function initWhatsApp() {
 
 /**
  * Initialize with automatic retry on failure.
+ * Catches both promise rejections AND unhandled rejections from
+ * whatsapp-web.js internal event handlers (e.g. "Execution context was destroyed").
+ *
  * @param {number} maxRetries - Maximum number of retries
  * @returns {Promise<void>}
  */
 async function initWithRetry(maxRetries = 3) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      await initWhatsApp();
+      await initWhatsAppGuarded();
       return;
     } catch (err) {
       logger.error(`WhatsApp init attempt ${attempt}/${maxRetries} failed: ${err.message}`);
+      await destroyClient();
       if (attempt < maxRetries) {
-        client = null;
-        isReady = false;
-        const delay = attempt * 5000;
+        const delay = attempt * 10000;
         logger.info(`Retrying in ${delay / 1000}s...`);
         await sleep(delay);
       } else {
@@ -97,6 +115,48 @@ async function initWithRetry(maxRetries = 3) {
       }
     }
   }
+}
+
+/**
+ * Wraps initWhatsApp() so that unhandled rejections thrown by whatsapp-web.js
+ * internals (outside the initialize() promise) are caught and treated as init failures.
+ */
+function initWhatsAppGuarded() {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    function onUnhandledRejection(reason) {
+      const msg = reason?.message || String(reason);
+      if (!settled && msg.includes('Execution context was destroyed')) {
+        settled = true;
+        logger.error(`Caught unhandled rejection during init: ${msg}`);
+        process.removeListener('unhandledRejection', onUnhandledRejection);
+        reject(new Error(msg));
+      }
+    }
+
+    process.on('unhandledRejection', onUnhandledRejection);
+
+    initWhatsApp()
+      .then(() => {
+        if (!settled) {
+          settled = true;
+          // Keep the listener active for a bit longer — the crash can happen
+          // a few seconds after 'ready' fires, during post-init injection.
+          setTimeout(() => {
+            process.removeListener('unhandledRejection', onUnhandledRejection);
+          }, 30000);
+          resolve();
+        }
+      })
+      .catch((err) => {
+        if (!settled) {
+          settled = true;
+          process.removeListener('unhandledRejection', onUnhandledRejection);
+          reject(err);
+        }
+      });
+  });
 }
 
 /**
