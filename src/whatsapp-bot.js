@@ -1,5 +1,4 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
 const logger = require('./logger');
 const config = require('./config');
 
@@ -37,10 +36,9 @@ function initWhatsApp() {
     });
 
     client.on('qr', (qr) => {
-      logger.info('QR code received — scan with WhatsApp on your phone:');
-      qrcode.generate(qr, { small: true }, (qrString) => {
-        console.log('\n' + qrString);
-      });
+      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qr)}`;
+      logger.info('Scan the QR code to link WhatsApp. Open this URL in your browser:');
+      logger.info(qrUrl);
     });
 
     client.on('authenticated', () => {
