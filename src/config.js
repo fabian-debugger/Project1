@@ -6,14 +6,14 @@ require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 const config = {
   gemini: {
     apiKey: process.env.GEMINI_API_KEY,
-    model: 'gemini-2.0-flash',
+    model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
   },
   whatsapp: {
     groupName: process.env.WHATSAPP_GROUP_NAME || 'Boodschappen',
     authPath: path.resolve(__dirname, '..', '.wwebjs_auth'),
   },
   scraper: {
-    url: process.env.TUINDERIJ_URL || 'https://www.tuinderijdelijsterbes.nl/',
+    url: process.env.TUINDERIJ_URL || 'https://www.tuinderijdelijsterbes.nl/groentetas/deze-week/',
     timeout: 30_000,
   },
   cron: {

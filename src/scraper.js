@@ -39,85 +39,82 @@ async function scrapeGroentetas() {
     // Wait for the page content to be fully rendered
     await page.waitForSelector('body', { timeout: 10_000 });
 
-    // Extract vegetables from the page.
-    // Strategy: look for common patterns on farm/CSA sites:
-    //   1. Lists (<ul>/<ol>) containing vegetable names
-    //   2. Sections with keywords like "groentetas", "pakket", "inhoud", "deze week"
-    //   3. Fallback: scan all text content for a recognizable vegetable list
+    // Extract vegetables from the "deze week" page.
+    // The page lists this week's groentetas contents.
     const vegetables = await page.evaluate(() => {
       const results = [];
 
-      // Helper: clean text and check if it looks like a vegetable item
-      const cleanText = (text) =>
-        text.replace(/\s+/g, ' ').trim().toLowerCase();
+      // Navigation items to exclude
+      const navItems = new Set([
+        'home', 'ons bedrijf', 'abonnement', 'aanmelden', 'bezorging',
+        'fotogalerij', 'fotogallerij', 'nieuwsbrief', 'contact', 'recepten',
+        'menu', 'zoeken', 'search', 'inloggen', 'login',
+      ]);
 
-      // Strategy 1: Find sections about the groentetas / weekly package
-      const allElements = document.querySelectorAll(
-        'h1, h2, h3, h4, p, li, td, span, div'
-      );
-      let captureMode = false;
+      const isNavItem = (text) => navItems.has(text.trim().toLowerCase());
+
       const sectionKeywords = [
-        'groentetas',
-        'pakket',
-        'inhoud',
-        'deze week',
-        'leveringslijst',
-        'groenten',
-        'groentepakket',
+        'groentetas', 'pakket', 'inhoud', 'deze week',
+        'leveringslijst', 'groenten', 'groentepakket',
       ];
 
-      for (const el of allElements) {
-        const text = cleanText(el.textContent || '');
+      // Strategy 1: Find lists inside the main content area (skip nav/header/footer)
+      const contentArea = document.querySelector('main, article, .content, .entry-content, #content')
+        || document.body;
 
-        // Check if this element is a header that signals the veggie list
-        if (
-          el.tagName.match(/^H[1-4]$/) &&
-          sectionKeywords.some((kw) => text.includes(kw))
-        ) {
-          captureMode = true;
-          continue;
-        }
+      // Look for lists that are NOT inside nav elements
+      const lists = contentArea.querySelectorAll('ul, ol');
+      for (const list of lists) {
+        // Skip lists inside nav, header, or footer
+        if (list.closest('nav, header, footer, .menu, .nav, .navigation')) continue;
 
-        // If in capture mode, grab list items
-        if (captureMode && el.tagName === 'LI') {
-          const itemText = (el.textContent || '').trim();
-          if (itemText.length > 0 && itemText.length < 100) {
-            results.push(itemText);
+        const items = list.querySelectorAll('li');
+        if (items.length >= 3) {
+          const listItems = [];
+          for (const item of items) {
+            const t = (item.textContent || '').trim();
+            // Skip nav-like items and items with links that look like navigation
+            if (t.length > 0 && t.length < 100 && !isNavItem(t)) {
+              listItems.push(t);
+            }
           }
-        }
-
-        // Stop capturing at the next unrelated header
-        if (captureMode && el.tagName.match(/^H[1-4]$/) && results.length > 0) {
-          break;
-        }
-      }
-
-      // Strategy 2: If nothing found yet, look for any <ul> or <ol> with 4+ items
-      // that contains short text entries (typical for a vegetable list)
-      if (results.length === 0) {
-        const lists = document.querySelectorAll('ul, ol');
-        for (const list of lists) {
-          const items = list.querySelectorAll('li');
-          if (items.length >= 4) {
-            const listItems = [];
-            for (const item of items) {
-              const t = (item.textContent || '').trim();
-              if (t.length > 0 && t.length < 80) {
-                listItems.push(t);
-              }
-            }
-            if (listItems.length >= 4) {
-              results.push(...listItems);
-              break;
-            }
+          // Only use this list if most items survived the nav filter
+          if (listItems.length >= 3 && listItems.length > items.length * 0.5) {
+            results.push(...listItems);
+            break;
           }
         }
       }
 
-      // Strategy 3: Look for an image with alt text about the groentetas,
-      // or text blocks that list items separated by commas or newlines
+      // Strategy 2: Find sections with groentetas keywords, then grab list items
       if (results.length === 0) {
-        const bodyText = document.body.innerText || '';
+        const allElements = contentArea.querySelectorAll('h1, h2, h3, h4, p, li, td, span, div');
+        let captureMode = false;
+
+        for (const el of allElements) {
+          const text = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+          if (el.tagName.match(/^H[1-4]$/) && sectionKeywords.some((kw) => text.includes(kw))) {
+            captureMode = true;
+            continue;
+          }
+
+          if (captureMode && el.tagName === 'LI') {
+            const itemText = (el.textContent || '').trim();
+            if (itemText.length > 0 && itemText.length < 100 && !isNavItem(itemText)) {
+              results.push(itemText);
+            }
+          }
+
+          if (captureMode && el.tagName.match(/^H[1-4]$/) && results.length > 0) {
+            break;
+          }
+        }
+      }
+
+      // Strategy 3: Scan plain text for short lines that look like vegetable names
+      if (results.length === 0) {
+        const bodyText = (contentArea.innerText || '').replace(/\r/g, '');
         const lines = bodyText.split('\n').map((l) => l.trim()).filter(Boolean);
 
         let inSection = false;
@@ -128,16 +125,15 @@ async function scrapeGroentetas() {
             continue;
           }
           if (inSection) {
-            // Check if this line looks like a vegetable item (short, no URLs)
             if (
               line.length > 1 &&
               line.length < 80 &&
               !line.includes('http') &&
-              !line.includes('@')
+              !line.includes('@') &&
+              !isNavItem(line)
             ) {
               results.push(line);
             }
-            // Stop if we hit an empty line or long text after collecting items
             if (results.length > 0 && (line.length > 100 || line === '')) {
               break;
             }
