@@ -92,16 +92,18 @@ function initWhatsApp() {
 
 /**
  * Initialize with automatic retry on failure.
- * Catches both promise rejections AND unhandled rejections from
- * whatsapp-web.js internal event handlers (e.g. "Execution context was destroyed").
+ * During initialization, "Execution context was destroyed" errors are expected
+ * (WhatsApp Web reloads the page after QR auth) and are silently absorbed.
+ * Only true failures (auth_failure, timeout) trigger a retry.
  *
  * @param {number} maxRetries - Maximum number of retries
+ * @param {number} readyTimeout - Max ms to wait for 'ready' after calling initialize()
  * @returns {Promise<void>}
  */
-async function initWithRetry(maxRetries = 3) {
+async function initWithRetry(maxRetries = 3, readyTimeout = 120000) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      await initWhatsAppGuarded();
+      await initWhatsAppSafe(readyTimeout);
       return;
     } catch (err) {
       logger.error(`WhatsApp init attempt ${attempt}/${maxRetries} failed: ${err.message}`);
@@ -118,41 +120,54 @@ async function initWithRetry(maxRetries = 3) {
 }
 
 /**
- * Wraps initWhatsApp() so that unhandled rejections thrown by whatsapp-web.js
- * internals (outside the initialize() promise) are caught and treated as init failures.
+ * Initializes WhatsApp while absorbing "Execution context was destroyed" errors.
+ * These are expected during QR auth because WhatsApp Web reloads the page.
+ * We must NOT destroy the client when this happens — just wait for 'ready'.
  */
-function initWhatsAppGuarded() {
+function initWhatsAppSafe(readyTimeout) {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let timeoutId;
 
+    // Absorb the unhandled rejection that whatsapp-web.js throws internally
+    // during page navigation after QR auth. This prevents the process from
+    // crashing without destroying the session.
     function onUnhandledRejection(reason) {
       const msg = reason?.message || String(reason);
-      if (!settled && msg.includes('Execution context was destroyed')) {
-        settled = true;
-        logger.error(`Caught unhandled rejection during init: ${msg}`);
-        process.removeListener('unhandledRejection', onUnhandledRejection);
-        reject(new Error(msg));
+      if (msg.includes('Execution context was destroyed')) {
+        logger.warn('Absorbed expected "Execution context was destroyed" during init — waiting for ready...');
+        // Do NOT reject — just swallow it and keep waiting for 'ready'
       }
     }
 
     process.on('unhandledRejection', onUnhandledRejection);
 
+    function cleanup() {
+      clearTimeout(timeoutId);
+      process.removeListener('unhandledRejection', onUnhandledRejection);
+    }
+
+    // Timeout: if 'ready' never fires, treat it as a failure
+    timeoutId = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        cleanup();
+        reject(new Error(`WhatsApp client did not become ready within ${readyTimeout / 1000}s`));
+      }
+    }, readyTimeout);
+
     initWhatsApp()
       .then(() => {
         if (!settled) {
           settled = true;
-          // Keep the listener active for a bit longer — the crash can happen
-          // a few seconds after 'ready' fires, during post-init injection.
-          setTimeout(() => {
-            process.removeListener('unhandledRejection', onUnhandledRejection);
-          }, 30000);
+          cleanup();
           resolve();
         }
       })
       .catch((err) => {
         if (!settled) {
           settled = true;
-          process.removeListener('unhandledRejection', onUnhandledRejection);
+          cleanup();
           reject(err);
         }
       });
