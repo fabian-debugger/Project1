@@ -75,6 +75,13 @@ async function main() {
   }
 }
 
+// Prevent unhandled rejections from crashing the process.
+// whatsapp-web.js throws "Execution context was destroyed" from internal
+// event handlers that cannot be caught with try/catch.
+process.on('unhandledRejection', (reason) => {
+  logger.error(`Unhandled rejection: ${reason?.message || reason}`);
+});
+
 // Handle graceful shutdown
 process.on('SIGINT', () => {
   logger.info('Shutting down...');
