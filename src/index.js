@@ -65,7 +65,7 @@ async function main() {
   // Allow manual trigger via "!menu" command in WhatsApp
   const waClient = getClient();
   if (waClient) {
-    waClient.on('message', async (msg) => {
+    waClient.on('message_create', async (msg) => {
       if (msg.body === '!menu') {
         logger.info('Manual trigger received via "!menu" command');
         await runPipeline();
