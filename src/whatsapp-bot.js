@@ -28,7 +28,12 @@ function createClient() {
         '--disable-dev-shm-usage',
         '--disable-gpu',
         '--disable-accelerated-2d-canvas',
-        '--single-process',
+        '--disable-extensions',
+        '--disable-background-networking',
+        '--disable-default-apps',
+        '--disable-translate',
+        '--no-first-run',
+        '--js-flags=--max-old-space-size=256',
       ],
     },
   });

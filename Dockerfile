@@ -27,4 +27,4 @@ RUN npm install --production
 
 COPY . .
 
-CMD ["node", "src/index.js"]
+CMD ["node", "--max-old-space-size=512", "src/index.js"]
