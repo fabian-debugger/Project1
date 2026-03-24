@@ -24,7 +24,7 @@ function initWhatsApp() {
         dataPath: config.whatsapp.authPath,
       }),
       webVersionCache: {
-        type: 'local',
+        type: 'none',
       },
       puppeteer: {
         headless: true,
