@@ -1,7 +1,7 @@
 const cron = require('node-cron');
 const { scrapeGroentetas } = require('./scraper');
 const { generateMealPlan } = require('./ai-generator');
-const { initWhatsApp, sendToGroup, getClient } = require('./whatsapp-bot');
+const { initWithRetry, sendToGroup, getClient } = require('./whatsapp-bot');
 const logger = require('./logger');
 const config = require('./config');
 
@@ -50,8 +50,8 @@ async function main() {
   logger.info(`Cron schedule: ${config.cron.schedule}`);
   logger.info(`Target group: ${config.whatsapp.groupName}`);
 
-  // Initialize WhatsApp (shows QR code on first run)
-  await initWhatsApp();
+  // Initialize WhatsApp (shows QR URL on first run, retries on failure)
+  await initWithRetry();
 
   // Schedule the weekly job
   cron.schedule(config.cron.schedule, () => {

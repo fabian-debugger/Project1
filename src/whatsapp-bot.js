@@ -7,7 +7,7 @@ let isReady = false;
 
 /**
  * Initialize the WhatsApp client with local session persistence.
- * Displays a QR code in the terminal on first run for authentication.
+ * Logs a QR code URL for authentication on first run.
  *
  * @returns {Promise<void>} Resolves when the client is ready
  */
@@ -23,6 +23,9 @@ function initWhatsApp() {
       authStrategy: new LocalAuth({
         dataPath: config.whatsapp.authPath,
       }),
+      webVersionCache: {
+        type: 'local',
+      },
       puppeteer: {
         headless: true,
         executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
@@ -31,6 +34,8 @@ function initWhatsApp() {
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--disable-gpu',
+          '--disable-accelerated-2d-canvas',
+          '--single-process',
         ],
       },
     });
@@ -62,8 +67,36 @@ function initWhatsApp() {
     });
 
     logger.info('Initializing WhatsApp client...');
-    client.initialize();
+    client.initialize().catch((err) => {
+      logger.error(`Client initialize error: ${err.message}`);
+      reject(err);
+    });
   });
+}
+
+/**
+ * Initialize with automatic retry on failure.
+ * @param {number} maxRetries - Maximum number of retries
+ * @returns {Promise<void>}
+ */
+async function initWithRetry(maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await initWhatsApp();
+      return;
+    } catch (err) {
+      logger.error(`WhatsApp init attempt ${attempt}/${maxRetries} failed: ${err.message}`);
+      if (attempt < maxRetries) {
+        client = null;
+        isReady = false;
+        const delay = attempt * 5000;
+        logger.info(`Retrying in ${delay / 1000}s...`);
+        await sleep(delay);
+      } else {
+        throw new Error(`WhatsApp init failed after ${maxRetries} attempts: ${err.message}`);
+      }
+    }
+  }
 }
 
 /**
@@ -106,7 +139,6 @@ async function sendToGroup(message) {
     for (let i = 0; i < chunks.length; i++) {
       await group.sendMessage(chunks[i]);
       logger.info(`Sent chunk ${i + 1}/${chunks.length} to group "${groupName}"`);
-      // Small delay between chunks to avoid rate-limiting
       if (i < chunks.length - 1) {
         await sleep(1000);
       }
@@ -154,4 +186,4 @@ function getClient() {
   return client;
 }
 
-module.exports = { initWhatsApp, sendToGroup, getStatus, getClient };
+module.exports = { initWhatsApp, initWithRetry, sendToGroup, getStatus, getClient };
