@@ -4,7 +4,7 @@
   "description": "Automated WhatsApp bot for weekly meal planning based on vegetable box deliveries",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "node --max-old-space-size=512 src/index.js",
     "scrape": "node src/test-scrape.js",
     "generate": "node src/test-generate.js",
     "dev": "node --watch src/index.js"
