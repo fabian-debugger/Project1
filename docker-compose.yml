@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  whatsapp-bot:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - whatsapp-auth:/app/.wwebjs_auth
+    mem_limit: 1g
+
+volumes:
+  whatsapp-auth:
