@@ -1,7 +1,7 @@
 const cron = require('node-cron');
 const { scrapeGroentetas } = require('./scraper');
 const { generateMealPlan } = require('./ai-generator');
-const { initWithRetry, sendToGroup, getClient } = require('./whatsapp-bot');
+const { initWithRetry, sendToGroup, getClient, cacheGroupFromMessage } = require('./whatsapp-bot');
 const logger = require('./logger');
 const config = require('./config');
 
@@ -66,6 +66,8 @@ async function main() {
   const waClient = getClient();
   if (waClient) {
     waClient.on('message_create', async (msg) => {
+      // Cache the group chat from any message to avoid slow getChats() later
+      cacheGroupFromMessage(msg);
       if (msg.body === '!menu') {
         logger.info('Manual trigger received via "!menu" command');
         await runPipeline();

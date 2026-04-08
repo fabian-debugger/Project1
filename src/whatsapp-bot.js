@@ -4,6 +4,7 @@ const config = require('./config');
 
 let client = null;
 let isReady = false;
+let cachedGroupChat = null;
 
 /**
  * Initialize the WhatsApp client with local session persistence.
@@ -184,6 +185,43 @@ function initWhatsAppSafe(readyTimeout) {
 }
 
 /**
+ * Cache the group chat from an incoming message to avoid expensive getChats().
+ */
+async function cacheGroupFromMessage(msg) {
+  if (cachedGroupChat) return;
+  try {
+    const chat = await msg.getChat();
+    if (chat.isGroup && chat.name === config.whatsapp.groupName) {
+      cachedGroupChat = chat;
+      logger.info(`Cached group chat: "${chat.name}"`);
+    }
+  } catch {
+    // ignore cache errors
+  }
+}
+
+/**
+ * Find the target group, using cache first, then getChatById, then getChats as fallback.
+ */
+async function findGroup(groupName) {
+  // 1. Use cached group if available
+  if (cachedGroupChat) {
+    logger.info(`Using cached group: "${groupName}"`);
+    return cachedGroupChat;
+  }
+
+  // 2. Fallback: load all chats (slow on low-memory VMs)
+  logger.info(`Searching for group: "${groupName}" (this may take a while on slow VMs)...`);
+  const chats = await client.getChats();
+  const group = chats.find((chat) => chat.isGroup && chat.name === groupName);
+  if (group) {
+    cachedGroupChat = group;
+    logger.info(`Found and cached group: "${groupName}"`);
+  }
+  return group;
+}
+
+/**
  * Send a message to the configured WhatsApp group.
  * Splits long messages into chunks of ~4000 chars to avoid WhatsApp limits.
  *
@@ -196,20 +234,11 @@ async function sendToGroup(message) {
   }
 
   const groupName = config.whatsapp.groupName;
-  logger.info(`Looking for WhatsApp group: "${groupName}"`);
-
-  const chats = await client.getChats();
-  const group = chats.find(
-    (chat) => chat.isGroup && chat.name === groupName
-  );
+  const group = await findGroup(groupName);
 
   if (!group) {
-    const availableGroups = chats
-      .filter((c) => c.isGroup)
-      .map((c) => c.name)
-      .join(', ');
     throw new Error(
-      `Groep "${groupName}" niet gevonden. Beschikbare groepen: ${availableGroups}`
+      `Groep "${groupName}" niet gevonden. Zorg dat de bot lid is van de groep.`
     );
   }
 
@@ -270,4 +299,4 @@ function getClient() {
   return client;
 }
 
-module.exports = { initWhatsApp, initWithRetry, sendToGroup, getStatus, getClient };
+module.exports = { initWhatsApp, initWithRetry, sendToGroup, getStatus, getClient, cacheGroupFromMessage };
