@@ -96,19 +96,50 @@ function getOriginalDishes() {
 
 /**
  * Replace a dish in the state and save.
+ * If it's a double dish (🍲x2), also updates the linked leftover day.
  */
 function replaceDish(dayNum, newName, newDescription) {
   const dish = state.dishes.find((d) => d.dayNum === dayNum);
   if (dish) {
     dish.name = newName;
     dish.description = newDescription;
+    dish.isDouble = false;
+
+    // Also update any leftover day that references this dish
+    const leftover = findLeftoverDay(dayNum);
+    if (leftover) {
+      leftover.name = `Restjes ${newName}`;
+      leftover.description = '';
+    }
+
     try {
       fs.writeFileSync(CACHE_FILE, JSON.stringify(state, null, 2));
     } catch { /* ignore */ }
   }
 }
 
+/**
+ * Find the leftover day linked to a given day number.
+ * Looks for "Restjes Dag X" patterns.
+ */
+function findLeftoverDay(dayNum) {
+  return state.dishes.find((d) =>
+    d.isLeftover && d.name.toLowerCase().includes(`dag ${dayNum}`)
+  ) || null;
+}
+
+/**
+ * Find the original dish if this day is a leftover day.
+ * Returns the original day number, or the same dayNum if not a leftover.
+ */
+function getOriginalDayForLeftover(dayNum) {
+  const dish = state.dishes.find((d) => d.dayNum === dayNum);
+  if (!dish || !dish.isLeftover) return dayNum;
+  const match = dish.name.match(/restjes\s+dag\s+(\d)/i);
+  return match ? parseInt(match[1]) : dayNum;
+}
+
 // Load from disk on module load
 loadMealPlan();
 
-module.exports = { saveMealPlan, getState, getDish, getOriginalDishes, replaceDish };
+module.exports = { saveMealPlan, getState, getDish, getOriginalDishes, replaceDish, findLeftoverDay, getOriginalDayForLeftover };

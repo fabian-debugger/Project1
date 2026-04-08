@@ -1,7 +1,7 @@
 const cron = require('node-cron');
 const { scrapeGroentetas } = require('./scraper');
 const { generateMealPlan, generateRecipe, generateReplacementDish } = require('./ai-generator');
-const { saveMealPlan, getState, getDish, getOriginalDishes, replaceDish } = require('./state');
+const { saveMealPlan, getState, getDish, getOriginalDishes, replaceDish, findLeftoverDay, getOriginalDayForLeftover } = require('./state');
 const { initWithRetry, sendToGroup, getClient, cacheGroupFromMessage } = require('./whatsapp-bot');
 const logger = require('./logger');
 const config = require('./config');
@@ -30,7 +30,7 @@ async function runPipeline() {
     // Step 3: Send to WhatsApp group
     logger.info('Step 3/3: Sending to WhatsApp group...');
     const header = `🌿 *Weekmenu van Tuinderij de Lijsterbes* 🌿\n_Automatisch gegenereerd op ${new Date().toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}_\n\n`;
-    const commandsTip = `\n\n💡 _Commando's: !recept1-5 voor een volledig recept, !vervang1-5 om een gerecht te vervangen_`;
+    const commandsTip = `\n\n💡 _Commando's: !recept1-7 voor een volledig recept, !vervang1-7 om een gerecht te vervangen_`;
     await sendToGroup(header + mealPlan + commandsTip);
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -98,7 +98,7 @@ async function main() {
 
     waClient.on('message_create', handleMessage);
     waClient.on('message', handleMessage);
-    logger.info('Commands enabled: !menu, !recept1-5, !vervang1-5');
+    logger.info('Commands enabled: !menu, !recept1-7, !vervang1-7');
   }
 }
 
@@ -110,15 +110,25 @@ async function handleRecept(dayNum) {
       return;
     }
 
-    // Find the original dish (not leftover days)
-    const originals = getOriginalDishes();
-    if (dayNum < 1 || dayNum > originals.length) {
-      await sendToGroup(`Kies een nummer van 1 t/m ${originals.length}. Voorbeeld: !recept2`);
+    const dish = getDish(dayNum);
+    if (!dish) {
+      await sendToGroup(`Dag ${dayNum} bestaat niet. Kies een nummer van 1 t/m 7. Voorbeeld: !recept5`);
       return;
     }
 
-    const dish = originals[dayNum - 1];
-    logger.info(`Generating recipe for dish ${dayNum}: ${dish.name}`);
+    // If it's a leftover day, get the recipe for the original dish
+    if (dish.isLeftover) {
+      const originalDay = getOriginalDayForLeftover(dayNum);
+      const originalDish = getDish(originalDay);
+      if (originalDish) {
+        await sendToGroup(`Dag ${dayNum} is restjesdag. Hier is het recept van Dag ${originalDay}: *${originalDish.name}*...`);
+        const recipe = await generateRecipe(originalDish.name, originalDish.description, state.vegetables);
+        await sendToGroup(recipe);
+        return;
+      }
+    }
+
+    logger.info(`Generating recipe for Dag ${dayNum}: ${dish.name}`);
     await sendToGroup(`Een moment, ik zoek het recept op voor *${dish.name}*...`);
 
     const recipe = await generateRecipe(dish.name, dish.description, state.vegetables);
@@ -137,25 +147,39 @@ async function handleVervang(dayNum) {
       return;
     }
 
-    const originals = getOriginalDishes();
-    if (dayNum < 1 || dayNum > originals.length) {
-      await sendToGroup(`Kies een nummer van 1 t/m ${originals.length}. Voorbeeld: !vervang2`);
+    let dish = getDish(dayNum);
+    if (!dish) {
+      await sendToGroup(`Dag ${dayNum} bestaat niet. Kies een nummer van 1 t/m 7. Voorbeeld: !vervang5`);
       return;
     }
 
-    const oldDish = originals[dayNum - 1];
-    logger.info(`Replacing dish ${dayNum}: ${oldDish.name}`);
-    await sendToGroup(`Een moment, ik bedenk een vervanger voor *${oldDish.name}*...`);
+    // If it's a leftover day, replace the original dish instead (both days change)
+    let targetDay = dayNum;
+    if (dish.isLeftover) {
+      targetDay = getOriginalDayForLeftover(dayNum);
+      dish = getDish(targetDay);
+      const leftoverDay = dayNum;
+      await sendToGroup(`Dag ${leftoverDay} is de restjesdag van Dag ${targetDay} (*${dish.name}*). Ik vervang beide dagen...`);
+    } else {
+      await sendToGroup(`Een moment, ik bedenk een vervanger voor *${dish.name}*...`);
+    }
 
-    const newDishText = await generateReplacementDish(state.dishes, state.vegetables, oldDish.dayNum);
+    logger.info(`Replacing Dag ${targetDay}: ${dish.name}`);
+    const newDishText = await generateReplacementDish(state.dishes, state.vegetables, targetDay);
 
     // Parse the new dish name from the response
     const nameMatch = newDishText.match(/^Dag\s+\d\s*:\s*(.+)/im);
     const newName = nameMatch ? nameMatch[1].trim() : newDishText.split('\n')[0];
     const newDesc = newDishText.split('\n').slice(1).join(' ').trim();
-    replaceDish(oldDish.dayNum, newName, newDesc);
+    replaceDish(targetDay, newName, newDesc);
 
-    await sendToGroup(`Gerecht ${dayNum} is vervangen:\n\n${newDishText}`);
+    // Build response showing which days changed
+    const leftover = findLeftoverDay(targetDay);
+    let response = `Dag ${targetDay} is vervangen:\n\n${newDishText}`;
+    if (leftover) {
+      response += `\n\nDag ${leftover.dayNum} is nu ook aangepast: Restjes ${newName}`;
+    }
+    await sendToGroup(response);
   } catch (error) {
     logger.error(`Dish replacement failed: ${error.message}`);
     await sendToGroup(`Vervangen mislukt: ${error.message}`);
