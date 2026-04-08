@@ -213,19 +213,26 @@ function loadGroupId() {
 }
 
 /**
- * Cache the group chat from an incoming message to avoid expensive getChats().
+ * Cache the group chat from an incoming message.
+ * Uses msg.id.remote (the chat ID) directly — avoids expensive msg.getChat().
+ * Then uses getChatById which is much lighter than getChats().
  */
 async function cacheGroupFromMessage(msg) {
   if (cachedGroupChat) return;
   try {
-    const chat = await msg.getChat();
-    if (chat.isGroup && chat.name === config.whatsapp.groupName) {
+    const chatId = msg.id.remote;
+    // Group IDs end with @g.us
+    if (!chatId || !chatId.endsWith('@g.us')) return;
+
+    logger.info(`Checking group message from chat ID: ${chatId}`);
+    const chat = await client.getChatById(chatId);
+    if (chat && chat.isGroup && chat.name === config.whatsapp.groupName) {
       cachedGroupChat = chat;
-      saveGroupId(chat.id._serialized, chat.name);
+      saveGroupId(chatId, chat.name);
       logger.info(`Cached group chat: "${chat.name}"`);
     }
-  } catch {
-    // ignore cache errors
+  } catch (err) {
+    logger.warn(`Cache attempt failed: ${err.message}`);
   }
 }
 
