@@ -1,10 +1,14 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
+const fs = require('fs');
+const path = require('path');
 const logger = require('./logger');
 const config = require('./config');
 
 let client = null;
 let isReady = false;
 let cachedGroupChat = null;
+
+const GROUP_ID_FILE = path.resolve(__dirname, '..', '.group-id.json');
 
 /**
  * Initialize the WhatsApp client with local session persistence.
@@ -185,6 +189,30 @@ function initWhatsAppSafe(readyTimeout) {
 }
 
 /**
+ * Save the group ID to disk so we never need getChats() again.
+ */
+function saveGroupId(groupId, groupName) {
+  try {
+    fs.writeFileSync(GROUP_ID_FILE, JSON.stringify({ id: groupId, name: groupName }));
+    logger.info(`Saved group ID to disk: "${groupName}"`);
+  } catch { /* ignore */ }
+}
+
+/**
+ * Load the group ID from disk (saved from a previous session).
+ */
+function loadGroupId() {
+  try {
+    if (fs.existsSync(GROUP_ID_FILE)) {
+      const data = JSON.parse(fs.readFileSync(GROUP_ID_FILE, 'utf8'));
+      logger.info(`Loaded saved group ID for: "${data.name}"`);
+      return data.id;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+/**
  * Cache the group chat from an incoming message to avoid expensive getChats().
  */
 async function cacheGroupFromMessage(msg) {
@@ -193,6 +221,7 @@ async function cacheGroupFromMessage(msg) {
     const chat = await msg.getChat();
     if (chat.isGroup && chat.name === config.whatsapp.groupName) {
       cachedGroupChat = chat;
+      saveGroupId(chat.id._serialized, chat.name);
       logger.info(`Cached group chat: "${chat.name}"`);
     }
   } catch {
@@ -201,7 +230,10 @@ async function cacheGroupFromMessage(msg) {
 }
 
 /**
- * Find the target group, using cache first, then getChatById, then getChats as fallback.
+ * Find the target group. Priority:
+ * 1. In-memory cache (instant)
+ * 2. Saved group ID from disk + getChatById (fast, no getChats needed)
+ * 3. Fallback: getChats (very slow on low-memory VMs, may timeout)
  */
 async function findGroup(groupName) {
   // 1. Use cached group if available
@@ -210,12 +242,29 @@ async function findGroup(groupName) {
     return cachedGroupChat;
   }
 
-  // 2. Fallback: load all chats (slow on low-memory VMs)
-  logger.info(`Searching for group: "${groupName}" (this may take a while on slow VMs)...`);
+  // 2. Try loading saved group ID and use getChatById (much faster than getChats)
+  const savedId = loadGroupId();
+  if (savedId) {
+    try {
+      logger.info(`Trying getChatById with saved group ID...`);
+      const chat = await client.getChatById(savedId);
+      if (chat) {
+        cachedGroupChat = chat;
+        logger.info(`Found group via saved ID: "${groupName}"`);
+        return chat;
+      }
+    } catch (err) {
+      logger.warn(`getChatById failed: ${err.message}`);
+    }
+  }
+
+  // 3. Last resort: load all chats (slow, may timeout on 1GB VMs)
+  logger.warn(`No saved group ID. Falling back to getChats() — this is slow! Send a message in "${groupName}" first next time.`);
   const chats = await client.getChats();
   const group = chats.find((chat) => chat.isGroup && chat.name === groupName);
   if (group) {
     cachedGroupChat = group;
+    saveGroupId(group.id._serialized, group.name);
     logger.info(`Found and cached group: "${groupName}"`);
   }
   return group;
