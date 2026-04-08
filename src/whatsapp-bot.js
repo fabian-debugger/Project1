@@ -22,6 +22,7 @@ function createClient() {
     puppeteer: {
       headless: true,
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      protocolTimeout: 180000,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
