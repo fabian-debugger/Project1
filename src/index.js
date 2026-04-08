@@ -47,17 +47,17 @@ async function runPipeline() {
 
 async function main() {
   logger.info('🤖 WhatsApp Meal Planner Bot starting...');
-  logger.info(`Cron schedule: ${config.cron.schedule}`);
+  logger.info(`Cron schedule: ${config.cron.schedule} (${config.cron.timezone})`);
   logger.info(`Target group: ${config.whatsapp.groupName}`);
 
   // Initialize WhatsApp (shows QR URL on first run, retries on failure)
   await initWithRetry();
 
-  // Schedule the weekly job
+  // Schedule the weekly job (Amsterdam timezone)
   cron.schedule(config.cron.schedule, () => {
     logger.info('Cron triggered — running pipeline');
     runPipeline();
-  });
+  }, { timezone: config.cron.timezone });
 
   logger.info('Bot is running. Waiting for cron trigger...');
   logger.info('Tip: Send "!menu" in the WhatsApp group to trigger manually.');

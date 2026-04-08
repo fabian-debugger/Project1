@@ -17,7 +17,8 @@ const config = {
     timeout: 30_000,
   },
   cron: {
-    schedule: process.env.CRON_SCHEDULE || '0 14 * * 1', // Monday 14:00
+    schedule: process.env.CRON_SCHEDULE || '0 13 * * 1', // Monday 13:00 Amsterdam
+    timezone: process.env.CRON_TIMEZONE || 'Europe/Amsterdam',
   },
   logging: {
     level: process.env.LOG_LEVEL || 'info',
