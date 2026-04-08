@@ -51,7 +51,17 @@ async function scrapeGroentetas() {
         'menu', 'zoeken', 'search', 'inloggen', 'login',
       ]);
 
+      // Patterns that indicate non-vegetable content
+      const junkPatterns = [
+        /bezorg/i, /regio/i, /levering/i, /gewijzigd/i, /voorkomen/i,
+        /groesbeek/i, /breedeweg/i, /grafwegen/i, /plaatsen/i,
+        /\d{2,}/, /week\s*\d+/i, /http/i, /@/,
+        /bestellen/i, /prijs/i, /euro/i, /€/,
+        /adres/i, /telefoon/i, /openingstijd/i,
+      ];
+
       const isNavItem = (text) => navItems.has(text.trim().toLowerCase());
+      const isJunk = (text) => junkPatterns.some((p) => p.test(text));
 
       const sectionKeywords = [
         'groentetas', 'pakket', 'inhoud', 'deze week',
@@ -74,7 +84,7 @@ async function scrapeGroentetas() {
           for (const item of items) {
             const t = (item.textContent || '').trim();
             // Skip nav-like items and items with links that look like navigation
-            if (t.length > 0 && t.length < 100 && !isNavItem(t)) {
+            if (t.length > 0 && t.length < 60 && !isNavItem(t) && !isJunk(t)) {
               listItems.push(t);
             }
           }
@@ -101,7 +111,7 @@ async function scrapeGroentetas() {
 
           if (captureMode && el.tagName === 'LI') {
             const itemText = (el.textContent || '').trim();
-            if (itemText.length > 0 && itemText.length < 100 && !isNavItem(itemText)) {
+            if (itemText.length > 0 && itemText.length < 60 && !isNavItem(itemText) && !isJunk(itemText)) {
               results.push(itemText);
             }
           }
@@ -127,10 +137,9 @@ async function scrapeGroentetas() {
           if (inSection) {
             if (
               line.length > 1 &&
-              line.length < 80 &&
-              !line.includes('http') &&
-              !line.includes('@') &&
-              !isNavItem(line)
+              line.length < 60 &&
+              !isNavItem(line) &&
+              !isJunk(line)
             ) {
               results.push(line);
             }

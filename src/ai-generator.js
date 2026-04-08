@@ -98,13 +98,27 @@ async function generateMealPlan(vegetables) {
 
   const userPrompt = `De groentetas van deze week bevat de volgende groenten:\n\n${vegetables.map((v) => `• ${v}`).join('\n')}\n\nMaak het weekmenu en de boodschappenlijst.`;
 
-  const result = await model.generateContent(userPrompt);
-  const response = result.response.text();
+  // Retry up to 3 times on temporary errors (503, 429)
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const result = await model.generateContent(userPrompt);
+      const response = result.response.text();
 
-  logger.info('Meal plan generated successfully');
-  logger.debug(`Generated plan:\n${response}`);
+      logger.info('Meal plan generated successfully');
+      logger.debug(`Generated plan:\n${response}`);
 
-  return response;
+      return response;
+    } catch (error) {
+      const isRetryable = /503|429|overloaded|high demand/i.test(error.message);
+      if (isRetryable && attempt < 3) {
+        const delay = attempt * 15000;
+        logger.warn(`Gemini API error (attempt ${attempt}/3): ${error.message}. Retrying in ${delay / 1000}s...`);
+        await new Promise((r) => setTimeout(r, delay));
+      } else {
+        throw error;
+      }
+    }
+  }
 }
 
 module.exports = { generateMealPlan, SYSTEM_PROMPT };
