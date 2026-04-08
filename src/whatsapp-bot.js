@@ -33,7 +33,10 @@ function createClient() {
         '--disable-default-apps',
         '--disable-translate',
         '--no-first-run',
-        '--js-flags=--max-old-space-size=256',
+        '--disable-software-rasterizer',
+        '--disable-features=TranslateUI',
+        '--disable-ipc-flooding-protection',
+        '--js-flags=--max-old-space-size=128',
       ],
     },
   });
@@ -105,7 +108,7 @@ function initWhatsApp() {
  * @param {number} readyTimeout - Max ms to wait for 'ready' after calling initialize()
  * @returns {Promise<void>}
  */
-async function initWithRetry(maxRetries = 3, readyTimeout = 120000) {
+async function initWithRetry(maxRetries = 5, readyTimeout = 300000) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       await initWhatsAppSafe(readyTimeout);
