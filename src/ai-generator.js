@@ -77,37 +77,55 @@ Overig:
 - Houd de beschrijvingen kort en smakelijk.
 - Gebruik Nederlandse namen voor gerechten waar mogelijk, maar internationaal mag ook.`;
 
+const RECIPE_PROMPT = `Je bent een ervaren vegetarische chef-kok. Je geeft een volledig recept in het Nederlands.
+
+## OUTPUT FORMAAT (plain text, geen markdown):
+
+🍳 [NAAM GERECHT]
+
+👥 Porties: [aantal]
+⏱️ Bereidingstijd: [tijd]
+
+Ingrediënten:
+• [ingrediënt — hoeveelheid]
+• ...
+
+Bereiding:
+1. [stap 1]
+2. [stap 2]
+...
+
+💡 Tip: [optionele tip]`;
+
+const REPLACE_PROMPT = `Je bent een creatieve vegetarische chef-kok. Je vervangt een gerecht in een bestaand weekmenu.
+
+## STRIKTE REGELS
+1. Het gerecht moet 100% vegetarisch zijn.
+2. Het moet ANDERS zijn dan de andere gerechten in het menu.
+3. Gebruik bij voorkeur groenten uit de geleverde groentetas.
+
+## OUTPUT FORMAAT (plain text, geen markdown):
+Dag [N]: [Naam nieuw gerecht]
+[Korte beschrijving, 1-2 zinnen met de hoofdingrediënten]`;
+
 /**
- * Generate a weekly meal plan based on the scraped vegetable list.
- *
- * @param {string[]} vegetables - Array of vegetable names from the groentetas
- * @returns {Promise<string>} Formatted meal plan + shopping list
+ * Call Gemini with retry logic for temporary errors.
  */
-async function generateMealPlan(vegetables) {
+async function callGemini(systemInstruction, userPrompt) {
   if (!config.gemini.apiKey) {
     throw new Error('GEMINI_API_KEY is niet ingesteld. Voeg deze toe aan je .env bestand.');
   }
 
-  logger.info('Generating meal plan with Gemini AI...');
-
   const genAI = new GoogleGenerativeAI(config.gemini.apiKey);
   const model = genAI.getGenerativeModel({
     model: config.gemini.model,
-    systemInstruction: SYSTEM_PROMPT,
+    systemInstruction,
   });
 
-  const userPrompt = `De groentetas van deze week bevat de volgende groenten:\n\n${vegetables.map((v) => `• ${v}`).join('\n')}\n\nMaak het weekmenu en de boodschappenlijst.`;
-
-  // Retry up to 3 times on temporary errors (503, 429)
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const result = await model.generateContent(userPrompt);
-      const response = result.response.text();
-
-      logger.info('Meal plan generated successfully');
-      logger.debug(`Generated plan:\n${response}`);
-
-      return response;
+      return result.response.text();
     } catch (error) {
       const isRetryable = /503|429|overloaded|high demand/i.test(error.message);
       if (isRetryable && attempt < 3) {
@@ -121,4 +139,51 @@ async function generateMealPlan(vegetables) {
   }
 }
 
-module.exports = { generateMealPlan, SYSTEM_PROMPT };
+/**
+ * Generate a weekly meal plan based on the scraped vegetable list.
+ *
+ * @param {string[]} vegetables - Array of vegetable names from the groentetas
+ * @returns {Promise<string>} Formatted meal plan + shopping list
+ */
+async function generateMealPlan(vegetables) {
+  logger.info('Generating meal plan with Gemini AI...');
+
+  const userPrompt = `De groentetas van deze week bevat de volgende groenten:\n\n${vegetables.map((v) => `• ${v}`).join('\n')}\n\nMaak het weekmenu en de boodschappenlijst.`;
+
+  const response = await callGemini(SYSTEM_PROMPT, userPrompt);
+  logger.info('Meal plan generated successfully');
+  return response;
+}
+
+/**
+ * Generate a full recipe for a specific dish.
+ */
+async function generateRecipe(dishName, dishDescription, vegetables) {
+  logger.info(`Generating recipe for: ${dishName}`);
+
+  const userPrompt = `Geef een volledig recept voor dit gerecht:\n\n${dishName}\n${dishDescription}\n\nBeschikbare groenten uit de groentetas: ${vegetables.join(', ')}.\nGebruik deze waar relevant.`;
+
+  const response = await callGemini(RECIPE_PROMPT, userPrompt);
+  logger.info('Recipe generated successfully');
+  return response;
+}
+
+/**
+ * Generate a replacement dish for the menu.
+ */
+async function generateReplacementDish(currentDishes, vegetables, dayNum) {
+  logger.info(`Generating replacement for day ${dayNum}`);
+
+  const otherDishes = currentDishes
+    .filter((d) => d.dayNum !== dayNum && !d.isLeftover)
+    .map((d) => `- ${d.name}`)
+    .join('\n');
+
+  const userPrompt = `Vervang het gerecht voor Dag ${dayNum} in het weekmenu.\n\nBeschikbare groenten: ${vegetables.join(', ')}\n\nAndere gerechten in het menu (mag NIET hetzelfde zijn):\n${otherDishes}\n\nGeef het nieuwe gerecht in het gevraagde formaat.`;
+
+  const response = await callGemini(REPLACE_PROMPT, userPrompt);
+  logger.info('Replacement dish generated successfully');
+  return response;
+}
+
+module.exports = { generateMealPlan, generateRecipe, generateReplacementDish, SYSTEM_PROMPT };
