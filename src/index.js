@@ -67,33 +67,37 @@ async function main() {
   logger.info('Bot is running. Waiting for cron trigger...');
   logger.info('Tip: Send "!menu" in the WhatsApp group to trigger manually.');
 
-  // Allow manual trigger via "!menu" command in WhatsApp
+  // Allow manual trigger via commands in WhatsApp
   const waClient = getClient();
   if (waClient) {
-    waClient.on('message_create', async (msg) => {
-      // Cache the group chat from any message to avoid slow getChats() later
+    // Handle all messages (both own and received)
+    function handleMessage(msg) {
+      logger.info(`Message received: "${msg.body?.substring(0, 50)}" from ${msg.from} (type: ${msg.type})`);
       cacheGroupFromMessage(msg);
 
-      const body = msg.body.trim();
+      const body = (msg.body || '').trim();
 
       if (body === '!menu') {
         logger.info('Manual trigger received via "!menu" command');
-        await runPipeline();
+        runPipeline();
         return;
       }
 
       const receptMatch = body.match(/^!recept\s?(\d)$/i);
       if (receptMatch) {
-        await handleRecept(parseInt(receptMatch[1]));
+        handleRecept(parseInt(receptMatch[1]));
         return;
       }
 
       const vervangMatch = body.match(/^!vervang\s?(\d)$/i);
       if (vervangMatch) {
-        await handleVervang(parseInt(vervangMatch[1]));
+        handleVervang(parseInt(vervangMatch[1]));
         return;
       }
-    });
+    }
+
+    waClient.on('message_create', handleMessage);
+    waClient.on('message', handleMessage);
     logger.info('Commands enabled: !menu, !recept1-5, !vervang1-5');
   }
 }
