@@ -213,27 +213,19 @@ function loadGroupId() {
 }
 
 /**
- * Cache the group chat from an incoming message.
- * Uses msg.id.remote (the chat ID) directly — avoids expensive msg.getChat().
- * Then uses getChatById which is much lighter than getChats().
+ * Save the group ID from an incoming message.
+ * Only saves the ID string — no expensive getChatById or getChats needed.
  */
-async function cacheGroupFromMessage(msg) {
-  if (cachedGroupChat) return;
-  try {
-    const chatId = msg.id.remote;
-    // Group IDs end with @g.us
-    if (!chatId || !chatId.endsWith('@g.us')) return;
+function cacheGroupFromMessage(msg) {
+  // Already have a group ID configured or saved
+  if (config.whatsapp.groupId || loadGroupId()) return;
 
-    logger.info(`Checking group message from chat ID: ${chatId}`);
-    const chat = await client.getChatById(chatId);
-    if (chat && chat.isGroup && chat.name === config.whatsapp.groupName) {
-      cachedGroupChat = chat;
-      saveGroupId(chatId, chat.name);
-      logger.info(`Cached group chat: "${chat.name}"`);
-    }
-  } catch (err) {
-    logger.warn(`Cache attempt failed: ${err.message}`);
-  }
+  const chatId = msg.id.remote;
+  if (!chatId || !chatId.endsWith('@g.us')) return;
+
+  // Save this group ID — we'll verify it's the right one when we send
+  logger.info(`Saving group ID from message: ${chatId}`);
+  saveGroupId(chatId, config.whatsapp.groupName);
 }
 
 /**
@@ -278,8 +270,18 @@ async function findGroup(groupName) {
 }
 
 /**
+ * Get the group chat ID. Priority: config > saved file > message cache.
+ */
+function getGroupId() {
+  if (config.whatsapp.groupId) return config.whatsapp.groupId;
+  const saved = loadGroupId();
+  if (saved) return saved;
+  return null;
+}
+
+/**
  * Send a message to the configured WhatsApp group.
- * Splits long messages into chunks of ~4000 chars to avoid WhatsApp limits.
+ * Uses client.sendMessage(chatId) directly — no getChats or getChatById needed.
  *
  * @param {string} message - The message to send
  * @returns {Promise<void>}
@@ -289,24 +291,24 @@ async function sendToGroup(message) {
     throw new Error('WhatsApp client is niet geïnitialiseerd. Start de bot eerst.');
   }
 
-  const groupName = config.whatsapp.groupName;
-  const group = await findGroup(groupName);
-
-  if (!group) {
+  const groupId = getGroupId();
+  if (!groupId) {
     throw new Error(
-      `Groep "${groupName}" niet gevonden. Zorg dat de bot lid is van de groep.`
+      'Geen groep-ID gevonden. Stuur eerst een bericht in de groep, of stel WHATSAPP_GROUP_ID in de .env in.'
     );
   }
+
+  const groupName = config.whatsapp.groupName;
 
   // Split into chunks if message is too long for WhatsApp
   const MAX_LENGTH = 4000;
   if (message.length <= MAX_LENGTH) {
-    await group.sendMessage(message);
+    await client.sendMessage(groupId, message);
     logger.info(`Message sent to group "${groupName}"`);
   } else {
     const chunks = splitMessage(message, MAX_LENGTH);
     for (let i = 0; i < chunks.length; i++) {
-      await group.sendMessage(chunks[i]);
+      await client.sendMessage(groupId, chunks[i]);
       logger.info(`Sent chunk ${i + 1}/${chunks.length} to group "${groupName}"`);
       if (i < chunks.length - 1) {
         await sleep(1000);

@@ -10,6 +10,7 @@ const config = {
   },
   whatsapp: {
     groupName: process.env.WHATSAPP_GROUP_NAME || 'Boodschappen',
+    groupId: process.env.WHATSAPP_GROUP_ID || '',
     authPath: path.resolve(__dirname, '..', '.wwebjs_auth'),
   },
   scraper: {
