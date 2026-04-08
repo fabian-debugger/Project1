@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const { scrapeGroentetas } = require('./scraper');
-const { generateMealPlan } = require('./ai-generator');
+const { generateMealPlan, generateRecipe, generateReplacementDish } = require('./ai-generator');
+const { saveMealPlan, getState, getDish, getOriginalDishes, replaceDish } = require('./state');
 const { initWithRetry, sendToGroup, getClient, cacheGroupFromMessage } = require('./whatsapp-bot');
 const logger = require('./logger');
 const config = require('./config');
@@ -23,10 +24,14 @@ async function runPipeline() {
     logger.info('Step 2/3: Generating meal plan...');
     const mealPlan = await generateMealPlan(vegetables);
 
+    // Save meal plan state for !recept and !vervang commands
+    saveMealPlan(vegetables, mealPlan);
+
     // Step 3: Send to WhatsApp group
     logger.info('Step 3/3: Sending to WhatsApp group...');
     const header = `🌿 *Weekmenu van Tuinderij de Lijsterbes* 🌿\n_Automatisch gegenereerd op ${new Date().toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}_\n\n`;
-    await sendToGroup(header + mealPlan);
+    const commandsTip = `\n\n💡 _Commando's: !recept1-5 voor een volledig recept, !vervang1-5 om een gerecht te vervangen_`;
+    await sendToGroup(header + mealPlan + commandsTip);
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
     logger.info(`=== Pipeline completed in ${duration}s ===`);
@@ -68,12 +73,88 @@ async function main() {
     waClient.on('message_create', async (msg) => {
       // Cache the group chat from any message to avoid slow getChats() later
       cacheGroupFromMessage(msg);
-      if (msg.body === '!menu') {
+
+      const body = msg.body.trim();
+
+      if (body === '!menu') {
         logger.info('Manual trigger received via "!menu" command');
         await runPipeline();
+        return;
+      }
+
+      const receptMatch = body.match(/^!recept\s?(\d)$/i);
+      if (receptMatch) {
+        await handleRecept(parseInt(receptMatch[1]));
+        return;
+      }
+
+      const vervangMatch = body.match(/^!vervang\s?(\d)$/i);
+      if (vervangMatch) {
+        await handleVervang(parseInt(vervangMatch[1]));
+        return;
       }
     });
-    logger.info('Manual trigger via "!menu" command enabled');
+    logger.info('Commands enabled: !menu, !recept1-5, !vervang1-5');
+  }
+}
+
+async function handleRecept(dayNum) {
+  try {
+    const state = getState();
+    if (!state.dishes.length) {
+      await sendToGroup('Er is nog geen weekmenu gegenereerd. Stuur eerst !menu.');
+      return;
+    }
+
+    // Find the original dish (not leftover days)
+    const originals = getOriginalDishes();
+    if (dayNum < 1 || dayNum > originals.length) {
+      await sendToGroup(`Kies een nummer van 1 t/m ${originals.length}. Voorbeeld: !recept2`);
+      return;
+    }
+
+    const dish = originals[dayNum - 1];
+    logger.info(`Generating recipe for dish ${dayNum}: ${dish.name}`);
+    await sendToGroup(`Een moment, ik zoek het recept op voor *${dish.name}*...`);
+
+    const recipe = await generateRecipe(dish.name, dish.description, state.vegetables);
+    await sendToGroup(recipe);
+  } catch (error) {
+    logger.error(`Recipe generation failed: ${error.message}`);
+    await sendToGroup(`Recept ophalen mislukt: ${error.message}`);
+  }
+}
+
+async function handleVervang(dayNum) {
+  try {
+    const state = getState();
+    if (!state.dishes.length) {
+      await sendToGroup('Er is nog geen weekmenu gegenereerd. Stuur eerst !menu.');
+      return;
+    }
+
+    const originals = getOriginalDishes();
+    if (dayNum < 1 || dayNum > originals.length) {
+      await sendToGroup(`Kies een nummer van 1 t/m ${originals.length}. Voorbeeld: !vervang2`);
+      return;
+    }
+
+    const oldDish = originals[dayNum - 1];
+    logger.info(`Replacing dish ${dayNum}: ${oldDish.name}`);
+    await sendToGroup(`Een moment, ik bedenk een vervanger voor *${oldDish.name}*...`);
+
+    const newDishText = await generateReplacementDish(state.dishes, state.vegetables, oldDish.dayNum);
+
+    // Parse the new dish name from the response
+    const nameMatch = newDishText.match(/^Dag\s+\d\s*:\s*(.+)/im);
+    const newName = nameMatch ? nameMatch[1].trim() : newDishText.split('\n')[0];
+    const newDesc = newDishText.split('\n').slice(1).join(' ').trim();
+    replaceDish(oldDish.dayNum, newName, newDesc);
+
+    await sendToGroup(`Gerecht ${dayNum} is vervangen:\n\n${newDishText}`);
+  } catch (error) {
+    logger.error(`Dish replacement failed: ${error.message}`);
+    await sendToGroup(`Vervangen mislukt: ${error.message}`);
   }
 }
 
